@@ -1,86 +1,63 @@
-// main.rs
-use bevy::{prelude::*, input::mouse::MouseWheel};
-use bevy::window::{PrimaryWindow, Window};
+//! This example cycles through different kinds of isometric maps.
+
+use bevy::prelude::*;
+use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
 
-mod tilemap;
-
-const CAMERA_PAN_SPEED: f32 = 200.0;
-const CAMERA_PAN_PROXIMITY: f32 = 50.0;
-const ZOOM_FACTOR: f32 = 0.1;
-const TRACKPAD_ZOOM_SENSITIVITY: f32 = 1.0;
+mod helper;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
-        .add_plugins(TilemapPlugin)
-        .add_systems(Startup, setup)
-        .add_systems(Update, edge_based_camera_pan)
-        .add_systems(Update, scroll_wheel_zoom)
+        // Bevy default plugins: prevent blur effect by changing default sampling
+        .add_plugins(DefaultPlugins.build().set(ImagePlugin::default_nearest()))
+        // Add bevy_ecs_tiled plugin: bevy_ecs_tilemap::TilemapPlugin will
+        // be automatically added as well if it's not already done
+        .add_plugins(TiledMapPlugin::default())
+        // Examples helper plugins, such as the logic to pan and zoom the camera
+        // This should not be used directly in your game (but you can always have a look)
+        .add_plugins(helper::HelperPlugin)
+        // Add our systems and run the app!
+        .add_systems(Startup, startup)
+        .add_systems(Update, switch_map)
         .run();
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    // Setup orthographic camera with initial zoom
-    commands.spawn((
-        Camera2d::default(),
-        Transform::from_scale(Vec3::splat(0.7)), // Slightly zoomed in by default
+fn startup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(Camera2d);
+
+    let default_callback: helper::assets::MapInfosCallback = |c| {
+        c.insert((
+            TiledMapAnchor::Center,
+            // For isometric maps, it can be useful to tweak `bevy_ecs_tilemap` render settings.
+            // [TilemapRenderSettings] provides the `y_sort`` parameter to sort chunks using their y-axis
+            // position during rendering.
+            // However, it applies to whole chunks, not individual tile, so we have to force the chunk
+            // size to be exactly one tile along the y-axis.
+            TilemapRenderSettings {
+                render_chunk_size: UVec2::new(64, 1),
+                y_sort: true,
+            },
+        ));
+    };
+
+    // The `helper::AssetsManager` struct is an helper to easily switch between maps in examples.
+    // You should NOT use it directly in your games.
+    let mut mgr = helper::assets::AssetsManager::new(&mut commands);
+    mgr.add_map(helper::assets::MapInfos::new(
+        &asset_server,
+        "maps/isometric/iso-mini-farm.tmx",
+        "My second try building an isometric map from assets in Tiled",
+        default_callback,
     ));
-
-    // Create our tilemap
-    tilemap::create_tilemap(&mut commands, asset_server);
+    commands.insert_resource(mgr);
 }
 
-fn edge_based_camera_pan(
-    mouse_pos_query: Query<&Window, With<PrimaryWindow>>,
-    mut camera_query: Query<&mut Transform, With<Camera2d>>,
-    time: Res<Time>,
+fn switch_map(
+    mut commands: Commands,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut mgr: ResMut<helper::assets::AssetsManager>,
 ) {
-    let window = mouse_pos_query.single();
-    if let Some(cursor_pos) = window.cursor_position() {
-        let win_width = window.width();
-        let win_height = window.height();
-        let mut pan_direction = Vec3::ZERO;
-
-        if cursor_pos.x <= CAMERA_PAN_PROXIMITY {
-            pan_direction.x -= 1.0;
-        }
-        if cursor_pos.x >= win_width - CAMERA_PAN_PROXIMITY {
-            pan_direction.x += 1.0;
-        }
-        if cursor_pos.y <= CAMERA_PAN_PROXIMITY {
-            pan_direction.y += 1.0;
-        }
-        if cursor_pos.y >= win_height - CAMERA_PAN_PROXIMITY {
-            pan_direction.y -= 1.0;
-        }
-
-        if pan_direction.length_squared() > 0.0 {
-            let pan_speed = CAMERA_PAN_SPEED * time.delta_secs();
-            for mut transform in camera_query.iter_mut() {
-                transform.translation += pan_direction.normalize() * pan_speed;
-            }
-        }
-    }
-}
-
-fn scroll_wheel_zoom(
-    mut scroll_evr: EventReader<MouseWheel>,
-    mut camera_query: Query<&mut Transform, With<Camera2d>>,
-) {
-    let mut camera_transform = camera_query.single_mut();
-    let mut delta = 0.0;
-
-    for ev in scroll_evr.read() {
-        delta += ev.y;
-    }
-
-    if delta.abs() > f32::EPSILON {
-        let zoom_amount = if delta > 0.0 {
-            1.0 - ZOOM_FACTOR * TRACKPAD_ZOOM_SENSITIVITY // Zoom in
-        } else {
-            1.0 + ZOOM_FACTOR * TRACKPAD_ZOOM_SENSITIVITY // Zoom out
-        };
-        camera_transform.scale *= zoom_amount;
+    if keyboard_input.just_pressed(KeyCode::Space) {
+        mgr.cycle_map(&mut commands);
     }
 }
